@@ -1,19 +1,27 @@
 use clap::Parser;
 use rand::seq::SliceRandom;
+use reqwest::header::{HeaderMap, HeaderValue};
 
-/// Simple program to choose a random open issue to work on
+/// Simple program to choose a random open issue to work on.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Name of username or organization
+    /// The handle for the GitHub user account.
     #[arg(short, long)]
     username: String,
+
+    /// Include forked repositories. Defaults to false.
+    #[arg(long)]
+    include_forked_repos: bool,
+
+    /// Authorization token to include private repositories
+    #[arg(short, long)]
+    token: Option<String>
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Debug)]
+#[derive(serde::Deserialize, Debug)]
 struct Repo {
     full_name: String,
-    private: bool,
     fork: bool,
     has_issues: bool,
     open_issues: u32,
@@ -38,44 +46,28 @@ impl std::fmt::Display for Issue {
     }
 }
 
-use reqwest::header::{HeaderMap, HeaderValue};
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    let client = build_http_client().expect("Failed to build http client");
-    let repos = client
-        .get(format!(
-            "https://api.github.com/users/{}/repos",
-            args.username
-        ))
-        .send()
-        .await
-        .expect("Failed to retrieve repositories")
-        .json::<Vec<Repo>>()
-        .await
-        .expect("Failed to parse json");
+    let client = build_http_client().expect("Failed to build http client.");
 
+    let repos = get_repos(&client, args.username)
+        .await
+        .expect("Failed to retrieve repositories.");
     let filtered_repos = repos
         .iter()
-        .filter(|repo| !repo.fork && repo.has_issues && repo.open_issues > 0)
+        .filter(|repo| repo.has_issues && repo.open_issues > 0)
+        .filter(|repo| args.include_forked_repos || !repo.fork)
         .collect::<Vec<_>>();
     let repo = filtered_repos
         .choose(&mut rand::thread_rng())
-        .expect("No viable repos to choose issues from");
-
-    let issues = client
-        .get(format!(
-            "https://api.github.com/repos/{}/issues",
-            repo.full_name
-        ))
-        .send()
+        .expect("No viable repos to choose issues from.");
+    let issues = get_issues(&client, &repo)
         .await
-        .expect(&format!("Failed to retrieve issues for {}", repo.full_name))
-        .json::<Vec<Issue>>()
-        .await
-        .expect(&format!("Failed to parse issues for {}", repo.full_name));
-
-    let issue = issues.choose(&mut rand::thread_rng()).expect("No viable issue found.");
+        .expect("Failed to retrieve issues.");
+    let issue = issues
+        .choose(&mut rand::thread_rng())
+        .expect("No viable issue found.");
     println!("🌟🦄 {} 🦄🌟", issue);
 }
 
@@ -91,7 +83,31 @@ fn build_http_client() -> Result<reqwest::Client, reqwest::Error> {
     );
 
     reqwest::Client::builder()
-        .user_agent("task-roulette")
+        .user_agent("issue-roulette")
         .default_headers(headers)
         .build()
+}
+
+async fn get_repos(
+    client: &reqwest::Client,
+    username: String,
+) -> Result<Vec<Repo>, reqwest::Error> {
+    client
+        .get(format!("https://api.github.com/users/{}/repos", username))
+        .send()
+        .await?
+        .json::<Vec<Repo>>()
+        .await
+}
+
+async fn get_issues(client: &reqwest::Client, repo: &Repo) -> Result<Vec<Issue>, reqwest::Error> {
+    client
+        .get(format!(
+            "https://api.github.com/repos/{}/issues",
+            repo.full_name
+        ))
+        .send()
+        .await?
+        .json::<Vec<Issue>>()
+        .await
 }
