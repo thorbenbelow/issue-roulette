@@ -1,6 +1,9 @@
 use clap::Parser;
 use rand::seq::SliceRandom;
-use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::{
+    header::{HeaderMap, HeaderValue},
+    StatusCode,
+};
 
 /// Simple program to choose a random open issue to work on.
 #[derive(Parser, Debug)]
@@ -54,7 +57,7 @@ async fn main() {
     let client = build_http_client(&token).expect("Failed to build http client.");
 
     let repos_req = match token {
-        Some(_) => get_all_repos(&client, args.username).await,
+        Some(_) => get_all_repos(&client).await,
         None => get_public_repos(&client, args.username).await,
     };
     let repos = repos_req.expect("Failed to retrieve repositories.");
@@ -97,16 +100,32 @@ fn build_http_client(token: &Option<HeaderValue>) -> Result<reqwest::Client, req
         .default_headers(headers)
         .build()
 }
-async fn get_all_repos(
-    client: &reqwest::Client,
-    username: String,
-) -> Result<Vec<Repo>, reqwest::Error> {
-    client
+
+#[derive(Debug, Clone)]
+struct BadRequestError(u16, String);
+impl std::fmt::Display for BadRequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}]: {}", self.0, self.1)
+    }
+}
+impl std::error::Error for BadRequestError {
+
+}
+
+async fn get_all_repos(client: &reqwest::Client) -> Result<Vec<Repo>, Box<dyn std::error::Error>> {
+    let res = client
         .get("https://api.github.com/user/repos?per_page=100")
         .send()
-        .await?
-        .json::<Vec<Repo>>()
-        .await
+        .await?;
+
+    let status = res.status();
+    if status != StatusCode::OK {
+        let text = res.text().await?;
+        return Err(Box::new(BadRequestError(status.as_u16(), text)));
+    }
+
+    let json = res.json::<Vec<Repo>>().await?;
+    Ok(json)
 }
 
 async fn get_public_repos(
@@ -114,7 +133,10 @@ async fn get_public_repos(
     username: String,
 ) -> Result<Vec<Repo>, reqwest::Error> {
     client
-        .get(format!("https://api.github.com/users/{}/repos?per_page=100", username))
+        .get(format!(
+            "https://api.github.com/users/{}/repos?per_page=100",
+            username
+        ))
         .send()
         .await?
         .json::<Vec<Repo>>()
