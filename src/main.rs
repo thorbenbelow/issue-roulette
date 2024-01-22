@@ -58,7 +58,7 @@ async fn main() {
 
     let repos_req = match token {
         Some(_) => get_all_repos(&client).await,
-        None => get_public_repos(&client, args.username).await,
+        None => get_public_repos(&client, args.username).await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>),
     };
     let repos = repos_req.expect("Failed to retrieve repositories.");
 
@@ -108,9 +108,7 @@ impl std::fmt::Display for BadRequestError {
         write!(f, "[{}]: {}", self.0, self.1)
     }
 }
-impl std::error::Error for BadRequestError {
-
-}
+impl std::error::Error for BadRequestError {}
 
 async fn get_all_repos(client: &reqwest::Client) -> Result<Vec<Repo>, Box<dyn std::error::Error>> {
     let res = client
